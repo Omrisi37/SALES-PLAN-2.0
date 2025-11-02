@@ -14,7 +14,6 @@ from pptx.util import Inches, Pt
 from pptx.enum.text import PP_ALIGN
 from weasyprint import HTML
 import plotly.express as px
-import google.generativeai as genai
 import vertexai
 from vertexai.generative_models import GenerativeModel, Tool
 from google.oauth2 import service_account
