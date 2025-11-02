@@ -17,6 +17,7 @@ import plotly.express as px
 import google.generativeai as genai
 import vertexai
 from vertexai.generative_models import GenerativeModel, Tool
+from google.oauth2 import service_account
 # --- Page Config ---
 st.set_page_config(layout="wide", page_title="Advanced Business Plan Dashboard")
 sns.set_theme(style="darkgrid", font_scale=1.1, palette="viridis")
@@ -1026,7 +1027,7 @@ with st.sidebar:
         
         # 1. אתחול ה-API (בודקים סודות Firebase, כי Vertex משתמש בהם)
         if "firebase" not in st.secrets:
-            st.error("לא הוגדרו סודות Firebase (נדרש לאימות Vertex AI).")
+        st.error("לא הוגדרו סודות Firebase (נדרש לאימות Vertex AI).")
         else:
             try:
                 # אימות ל-Vertex AI משתמש באותם סודות של Firebase
@@ -1036,7 +1037,12 @@ with st.sidebar:
                 if not project_id:
                     st.error("project_id חסר בסודות ה-Firebase.")
                 else:
-                    vertexai.init(project=project_id, location="us-central1") # מיקום סטנדרטי
+                    # --- התחלה: התיקון ---
+                    # 1. ניצור אובייקט credentials מלא מתוך הסודות
+                    credentials = service_account.Credentials.from_service_account_info(creds_json)
+                    
+                    # 2. נאתחל את Vertex AI ונעביר לו את ה-credentials במפורש
+                    vertexai.init(project=project_id, location="us-central1", credentials=credentials)
                     
                     # המרת ה-schema של הכלים לפורמט החדש
                     tools_vertex = Tool.from_dict({"function_declarations": tools_schema})
