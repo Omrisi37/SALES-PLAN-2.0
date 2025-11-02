@@ -1027,7 +1027,7 @@ with st.sidebar:
         
         # 1. אתחול ה-API (בודקים סודות Firebase, כי Vertex משתמש בהם)
         if "firebase" not in st.secrets:
-        st.error("לא הוגדרו סודות Firebase (נדרש לאימות Vertex AI).")
+            st.error("לא הוגדרו סודות Firebase (נדרש לאימות Vertex AI).")
         else:
             try:
                 # אימות ל-Vertex AI משתמש באותם סודות של Firebase
@@ -1043,9 +1043,6 @@ with st.sidebar:
                     
                     # 2. נאתחל את Vertex AI ונעביר לו את ה-credentials במפורש
                     vertexai.init(project=project_id, location="us-central1", credentials=credentials)
-                    
-                    # המרת ה-schema של הכלים לפורמט החדש
-                    tools_vertex = Tool.from_dict({"function_declarations": tools_schema})
     
                     # אתחול המודל עם הגדרת הכלים
                     model = GenerativeModel(
