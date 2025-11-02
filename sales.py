@@ -1042,7 +1042,7 @@ with st.sidebar:
                     tools_vertex = Tool.from_dict({"function_declarations": tools_schema})
     
                     model = GenerativeModel(
-                        "gemini-1.0-pro",
+                        "gemini-2.5-pro",
                         tools=[tools_vertex]
                     )
     
