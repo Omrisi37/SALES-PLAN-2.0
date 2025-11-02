@@ -947,7 +947,7 @@ with st.expander("🤖 AI Analyst", expanded=True):
             
             # אתחול המודל עם הגדרת הכלים
             model = genai.GenerativeModel(
-                'gemini-1.5-pro-latest',
+                'gemini-pro',
                 tools=tools_schema
             )
 
