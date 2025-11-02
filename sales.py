@@ -1022,6 +1022,7 @@ with st.sidebar:
                         save_scenario(user_id, scenario_name_to_save, all_inputs)
                         st.rerun()
     # --- התחלה: בלוק AI Analyst (מבוסס Vertex AI) ---
+    # --- התחלה: בלוק AI Analyst (מבוסס Vertex AI) ---
     with st.expander("🤖 AI Analyst (Beta)", expanded=True):
         
         # 1. אתחול ה-API (בודקים סודות Firebase, כי Vertex משתמש בהם)
@@ -1029,27 +1030,18 @@ with st.sidebar:
             st.error("לא הוגדרו סודות Firebase (נדרש לאימות Vertex AI).")
         else:
             try:
-            # אימות ל-Vertex AI משתמש באותם סודות של Firebase
                 creds_json = dict(st.secrets.firebase)
                 project_id = creds_json.get("project_id")
                 
                 if not project_id:
                     st.error("project_id חסר בסודות ה-Firebase.")
                 else:
-                    # --- התחלה: התיקון ---
-                    # 1. ניצור אובייקט credentials מלא מתוך הסודות
                     credentials = service_account.Credentials.from_service_account_info(creds_json)
-                    
-                    # 2. נאתחל את Vertex AI ונעביר לו את ה-credentials במפורש
                     vertexai.init(project=project_id, location="us-central1", credentials=credentials)
-                    
-                    # 3. (!!!) הוספנו חזרה את השורה החסרה הזו (!!!)
                     tools_vertex = Tool.from_dict({"function_declarations": tools_schema})
-                    # --- סוף: התיקון ---
     
-                    # אתחול המודל עם הגדרת הכלים
                     model = GenerativeModel(
-                        "gemini-2.5-pro", 
+                        "gemini-1.0-pro", # שימוש בשם הדגם היציב
                         tools=[tools_vertex]
                     )
     
@@ -1057,13 +1049,13 @@ with st.sidebar:
                     if "chat_session" not in st.session_state:
                         st.session_state.chat_session = model.start_chat(history=[])
                     
-                    # הצגת הודעות קודמות
+                    # הצגת הודעות קודמות (כאן המבנה נכון)
                     for message in st.session_state.chat_session.history:
                         role = "assistant" if message.role == "model" else message.role
                         with st.chat_message(role):
                             st.markdown(message.parts[0].text)
     
-                    # 2. הכנת "הקונטקסט" (זהה לקודם)
+                    # 2. הכנת "הקונטקסט"
                     data_context = "--- נתונים עדכניים ---\n"
                     if "results" in st.session_state and st.session_state.results:
                         data_context += "המשתמש הריץ ניתוח. להלן סיכום התוצאות:\n"
@@ -1081,67 +1073,50 @@ with st.sidebar:
                         data_context += "המשתמש עדיין לא הריץ ניתוח. הוא נמצא בשלב הגדרת הפרמטרים.\n"
                     data_context += "--- סוף נתונים ---\n"
                     
-                    # 3. קבלת שאלה מהמשתמש (זהה)
+                    # 3. קבלת שאלה מהמשתמש
                     if user_question := st.chat_input("שנה מחיר מוצר 1 ל-20..."):
                         with st.chat_message("user"):
                             st.markdown(user_question)
                         
-                        # 4. בניית ההנחיה (Prompt) (זהה)
+                        # 4. בניית ההנחיה (Prompt)
                         all_setting_keys = [k for k in st.session_state.keys() if isinstance(k, str) and not k.startswith(('_', 'chat_session', 'results', 'messages', 'FormSubmitter'))]
                         
                         prompt_context = f"""
                         אתה עוזר AI שמנהל דשבורד תוכנית עסקית ב-Streamlit.
-                        
-                        המשימות שלך:
-                        1.  **לענות על שאלות:** ענה על שאלות המשתמש לגבי התוצאות (אם קיימות).
-                        2.  **לשנות הגדרות:** אם המשתמש מבקש לשנות הגדרה (למשל "שנה מחיר", "הוסף שנה"), עליך להשתמש בכלי `update_setting`.
-    
-                        מידע חשוב:
-                        -   הפורמט של מפתחות הגדרה עבור מוצרים הוא: `key_שםהמוצר`. 
-                            לדוגמה, המחיר ההתחלחי של "Product 1" הוא המפתח `ip_unit_Product 1`.
-                        -   פרמטרים גלובליים הם פשוטים, למשל `start_year`.
-                        
-                        ---
-                        רשימת מפתחות ההגדרה הקיימים כרגע (לשימושך ב-`setting_key`):
-                        {all_setting_keys}
-                        ---
-                        
-                        הנתונים הנוכחיים מהדשבורד:
-                        {data_context}
-                        ---
-                        
+                        (וכו'... כל ההנחיה שלך נשארת זהה)
+                        ...
                         המשך את השיחה וענה לבקשת המשתמש:
                         """
     
-                        # 5. שליחת הבקשה וקבלת תשובה (קצת שונה)
+                        # 5. שליחת הבקשה וקבלת תשובה
                         try:
                             response = st.session_state.chat_session.send_message(prompt_context + user_question)
                             
+                            # --- התחלה: התיקון ---
                             # 6. בדיקה אם ה-AI רוצה להשתמש בכלי
-                            if response.parts[0].function_call:
-                                function_call = response.parts[0].function_call
+                            # הדרך הנכונה לבדוק ב-vertexai
+                            response_part = response.candidates[0].content.parts[0]
+                            
+                            if response_part.function_call:
+                                function_call = response_part.function_call
                                 function_name = function_call.name
                                 
                                 if function_name in available_tools:
                                     function_to_call = available_tools[function_name]
-                                    function_args = {k: v for k, v in function_call.args.items()} # המרה קטנה
+                                    function_args = {k: v for k, v in function_call.args.items()} 
                                     
-                                    # --- הפעלת הפונקציה ---
                                     with st.spinner(f"מבצע: {function_name}({function_args.get('setting_key')})..."):
                                         function_response = function_to_call(**function_args)
                                     
-                                    # --- שליחת התוצאה חזרה ל-AI ---
-                                    # (הפורמט של Vertex קצת שונה)
                                     from vertexai.generative_models import Part
                                     response = st.session_state.chat_session.send_message(
                                         Part.from_function_response(name=function_name, response={"content": function_response})
                                     )
                                     
-                                    # הצגת התשובה הסופית של ה-AI
                                     with st.chat_message("assistant"):
-                                        st.markdown(response.parts[0].text)
+                                        # תיקון #2: להשתמש ב-response.text
+                                        st.markdown(response.text)
                                     
-                                    # --- רענון האפליקציה ---
                                     st.rerun()
     
                                 else:
@@ -1151,7 +1126,9 @@ with st.sidebar:
                             else:
                                 # 7. אם זו תשובה רגילה (טקסט)
                                 with st.chat_message("assistant"):
-                                    st.markdown(response.parts[0].text)
+                                    # תיקון #3: להשתמש ב-response.text
+                                    st.markdown(response.text)
+                            # --- סוף: התיקון ---
     
                         except Exception as e:
                             with st.chat_message("assistant"):
@@ -1159,6 +1136,7 @@ with st.sidebar:
     
             except Exception as e:
                 st.error(f"שגיאה באתחול מודל ה-AI: {e}")
+    # --- סוף: בלוק AI Analyst (מבוסס Vertex AI) ---
     # --- Expander for Managing Products ---
     with st.expander("Manage Products"):
     
