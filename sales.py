@@ -920,6 +920,7 @@ st.title("Dynamic Multi-Product Business Plan Dashboard")
 with st.sidebar:
     st.title("Business Plan Controls")
     # --- התחלה: בלוק AI Analyst (מבוסס Vertex AI) - מתוקן ---
+    # --- התחלה: בלוק AI Analyst (מבוסס Vertex AI) - תיקון תצוגה ---
     with st.expander("🤖 AI Analyst (Beta)", expanded=True):
         
         # 1. אתחול ה-API
@@ -942,29 +943,22 @@ with st.sidebar:
                         tools=[tools_vertex]
                     )
     
-                    # אתחול היסטוריית הצ'אט
+                    # --- התחלה: התיקון ---
+                    # אתחול היסטוריית ה-AI הפנימית
                     if "chat_session" not in st.session_state:
                         st.session_state.chat_session = model.start_chat(history=[])
                     
-                    # --- התחלה: התיקון לבעיה 1 (הודעה מוזרה) ---
-                    # לולאה משודרגת שמציגה רק הודעות טקסט
-                    for message in st.session_state.chat_session.history:
-                        role = "assistant" if message.role == "model" else message.role
-                        try:
-                            part = message.parts[0]
-                            # נבדוק אם יש לזה תוכן טקסטואלי
-                            if hasattr(part, 'text') and part.text:
-                                with st.chat_message(role):
-                                    st.markdown(part.text)
-                            # אם לא (למשל, זו קריאה לפונקציה או תגובה), פשוט נדלג
-                            else:
-                                continue
-                        except Exception:
-                            # נתפוס כל שגיאה אחרת ופשוט נדלג על ההודעה
-                            continue
-                    # --- סוף: התיקון לבעיה 1 ---
+                    # אתחול היסטוריית ה-UI (מה שהמשתמש רואה)
+                    if "ui_messages" not in st.session_state:
+                        st.session_state.ui_messages = []
+                    
+                    # הצגת הודעות מתוך היסטוריית ה-UI הנקייה
+                    for message in st.session_state.ui_messages:
+                        with st.chat_message(message["role"]):
+                            st.markdown(message["content"])
+                    # --- סוף: התיקון ---
     
-                    # 2. הכנת "הקונטקסט"
+                    # 2. הכנת "הקונטקסט" (נשאר זהה)
                     data_context = "--- נתונים עדכניים ---\n"
                     if "results" in st.session_state and st.session_state.results:
                         data_context += "המשתמש הריץ ניתוח. להלן סיכום התוצאות:\n"
@@ -984,14 +978,16 @@ with st.sidebar:
                     
                     # 3. קבלת שאלה מהמשתמש
                     if user_question := st.chat_input("שנה מחיר מוצר 1 ל-20..."):
+                        # --- התחלה: התיקון ---
+                        # 1. הוסף את ההודעה הנקייה ל-UI ולהצגה
+                        st.session_state.ui_messages.append({"role": "user", "content": user_question})
                         with st.chat_message("user"):
                             st.markdown(user_question)
+                        # --- סוף: התיקון ---
                         
-                        # 4. בניית ההנחיה (Prompt)
-                        all_setting_keys = [k for k in st.session_state.keys() if isinstance(k, str) and not k.startswith(('_', 'chat_session', 'results', 'messages', 'FormSubmitter'))]
+                        # 4. בניית ההנחיה (Prompt) (נשאר זהה)
+                        all_setting_keys = [k for k in st.session_state.keys() if isinstance(k, str) and not k.startswith(('_', 'chat_session', 'results', 'messages', 'FormSubmitter', 'ui_messages'))]
                         
-                        # --- התחלה: התיקון לבעיה 2 (AI מסרב) ---
-                        # הנחיה ברורה ותקיפה יותר
                         prompt_context = f"""
                         אתה עוזר AI שמנהל דשבורד תוכנית עסקית ב-Streamlit.
                         
@@ -1015,11 +1011,13 @@ with st.sidebar:
                         
                         המשך את השיחה וענה לבקשת המשתמש:
                         """
-                        # --- סוף: התיקון לבעיה 2 ---
     
                         # 5. שליחת הבקשה וקבלת תשובה
                         try:
+                            # --- התחלה: התיקון ---
+                            # 2. שלח את ההודעה המלאה (עם הקונטקסט) ל-AI
                             response = st.session_state.chat_session.send_message(prompt_context + user_question)
+                            # --- סוף: התיקון ---
                             
                             response_part = response.candidates[0].content.parts[0]
                             
@@ -1039,8 +1037,13 @@ with st.sidebar:
                                         Part.from_function_response(name=function_name, response={"content": function_response})
                                     )
                                     
+                                    # --- התחלה: התיקון ---
+                                    # 3. הוסף את התשובה הנקייה ל-UI
+                                    ai_response_text = response.text
+                                    st.session_state.ui_messages.append({"role": "assistant", "content": ai_response_text})
                                     with st.chat_message("assistant"):
-                                        st.markdown(response.text)
+                                        st.markdown(ai_response_text)
+                                    # --- סוף: התיקון ---
                                     
                                     st.rerun()
     
@@ -1049,8 +1052,13 @@ with st.sidebar:
                                         st.error(f"ה-AI ניסה לקרוא לפונקציה לא קיימת: {function_name}")
     
                             else:
+                                # --- התחלה: התיקון ---
+                                # 3. הוסף את התשובה הנקייה ל-UI
+                                ai_response_text = response.text
+                                st.session_state.ui_messages.append({"role": "assistant", "content": ai_response_text})
                                 with st.chat_message("assistant"):
-                                    st.markdown(response.text)
+                                    st.markdown(ai_response_text)
+                                # --- סוף: התיקון ---
     
                         except Exception as e:
                             with st.chat_message("assistant"):
