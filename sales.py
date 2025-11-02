@@ -919,8 +919,8 @@ st.title("Dynamic Multi-Product Business Plan Dashboard")
 
 with st.sidebar:
     st.title("Business Plan Controls")
-    # --- התחלה: בלוק AI Analyst (מבוסס Vertex AI) - תיקון ארכיטקטורה ---
-    with st.expander("🤖 AI Analyst (Beta)", expanded=True):
+    # --- התחלה: בלוק AI Analyst (מבוסס Vertex AI) - תמיכה בריבוי פעולות ---
+    with st.expander("🤖 AI Analyst", expanded=True):
         
         # 1. אתחול ה-API
         if "firebase" not in st.secrets:
@@ -936,11 +936,7 @@ with st.sidebar:
                     credentials = service_account.Credentials.from_service_account_info(creds_json)
                     vertexai.init(project=project_id, location="us-central1", credentials=credentials)
                     
-                    # --- התחלה: התיקון ---
-                    
-                    # 1. נבנה את הקונטקסט וההנחיות *לפני* אתחול המודל
-                    
-                    # א. איסוף נתונים עדכניים
+                    # --- הכנת הנחיות המערכת (פעם אחת) ---
                     data_context = "--- נתונים עדכניים ---\n"
                     if "results" in st.session_state and st.session_state.results:
                         data_context += "המשתמש הריץ ניתוח. להלן סיכום התוצאות:\n"
@@ -958,16 +954,14 @@ with st.sidebar:
                         data_context += "המשתמש עדיין לא הריץ ניתוח. הוא נמצא בשלב הגדרת הפרמטרים.\n"
                     data_context += "--- סוף נתונים ---\n"
     
-                    # ב. איסוף מפתחות ההגדרה
                     all_setting_keys = [k for k in st.session_state.keys() if isinstance(k, str) and not k.startswith(('_', 'chat_session', 'results', 'messages', 'FormSubmitter', 'ui_messages'))]
     
-                    # ג. בניית הנחיית המערכת (System Instruction)
                     system_instruction_text = f"""
                     אתה עוזר AI שמנהל דשבורד תוכנית עסקית ב-Streamlit.
                     
                     המשימות שלך:
                     1.  **לענות על שאלות:** ענה על שאלות המשתמש לגבי התוצאות (אם קיימות).
-                    2.  **לשנות הגדרות:** אם המשתמש מבקש לשנות הגדרה (למשל "שנה מחיר", "הוסף שנה"), אתה **חייב** להשתמש בכלי `update_setting`. אל תסרב לבקשות שינוי.
+                    2.  **לשנות הגדרות:** אם המשתמש מבקש לשנות הגדרה (למשל "שנה מחיר", "הוסף שנה"), אתה **חייב** להשתמש בכלי `update_setting`. אם הוא מבקש לשנות מספר דברים, בצע אותם אחד אחרי השני באמצעות קריאות נפרדות לכלי. אל תסרב לבקשות שינוי.
     
                     מידע חשוב:
                     -   הפורמט של מפתחות הגדרה עבור מוצרים הוא: `key_שםהמוצר`. 
@@ -991,24 +985,21 @@ with st.sidebar:
                     model = GenerativeModel(
                         "gemini-2.5-pro",
                         tools=[tools_vertex],
-                        system_instruction=system_instruction_text # הוספנו את ההנחיה הקבועה כאן
+                        system_instruction=system_instruction_text
                     )
     
                     # אתחול היסטוריית ה-AI הפנימית
                     if "chat_session" not in st.session_state:
                         st.session_state.chat_session = model.start_chat(history=[])
                     
-                    # אתחול היסטוריית ה-UI (מה שהמשתמש רואה)
+                    # אתחול היסטוריית ה-UI
                     if "ui_messages" not in st.session_state:
                         st.session_state.ui_messages = []
                     
-                    # הצגת הודעות מתוך היסטוריית ה-UI הנקייה
+                    # הצגת היסטוריית ה-UI
                     for message in st.session_state.ui_messages:
                         with st.chat_message(message["role"]):
                             st.markdown(message["content"])
-                    
-                    # --- סוף: התיקון ---
-    
     
                     # 3. קבלת שאלה מהמשתמש
                     if user_question := st.chat_input("שנה מחיר מוצר 1 ל-20..."):
@@ -1016,17 +1007,15 @@ with st.sidebar:
                         with st.chat_message("user"):
                             st.markdown(user_question)
                         
-                        # 4. שליחת הבקשה (רק השאלה הנקייה)
+                        # 4. שליחת הבקשה ל-AI
                         try:
-                            # --- התחלה: התיקון ---
-                            # אנחנו שולחים רק את השאלה, לא את כל הקונטקסט
                             response = st.session_state.chat_session.send_message(user_question)
-                            # --- סוף: התיקון ---
                             
-                            response_part = response.candidates[0].content.parts[0]
+                            # --- התחלה: התיקון (לולאת פונקציות) ---
                             
-                            if response_part.function_call:
-                                function_call = response_part.function_call
+                            # ניכנס ללולאה שתרוץ כל עוד ה-AI מבקש להפעיל פונקציות
+                            while response.candidates[0].content.parts[0].function_call:
+                                function_call = response.candidates[0].content.parts[0].function_call
                                 function_name = function_call.name
                                 
                                 if function_name in available_tools:
@@ -1034,29 +1023,31 @@ with st.sidebar:
                                     function_args = {k: v for k, v in function_call.args.items()} 
                                     
                                     with st.spinner(f"מבצע: {function_name}({function_args.get('setting_key')})..."):
-                                        function_response = function_to_call(**function_args)
+                                        function_response_content = function_to_call(**function_args)
                                     
+                                    # נשלח את התוצאה של הפונקציה חזרה ל-AI
                                     from vertexai.generative_models import Part
                                     response = st.session_state.chat_session.send_message(
-                                        Part.from_function_response(name=function_name, response={"content": function_response})
+                                        Part.from_function_response(name=function_name, response={"content": function_response_content})
                                     )
-                                    
-                                    ai_response_text = response.text
-                                    st.session_state.ui_messages.append({"role": "assistant", "content": ai_response_text})
-                                    with st.chat_message("assistant"):
-                                        st.markdown(ai_response_text)
-                                    
-                                    st.rerun()
+                                    # הלולאה תבדוק כעת את התגובה החדשה של ה-AI.
+                                    # אם זו עוד פונקציה, הלולאה תמשיך. אם זה טקסט, היא תסתיים.
     
                                 else:
                                     with st.chat_message("assistant"):
                                         st.error(f"ה-AI ניסה לקרוא לפונקציה לא קיימת: {function_name}")
-    
-                            else:
-                                ai_response_text = response.text
-                                st.session_state.ui_messages.append({"role": "assistant", "content": ai_response_text})
-                                with st.chat_message("assistant"):
-                                    st.markdown(ai_response_text)
+                                    break # שבור את הלולאה אם יש שגיאה
+                            
+                            # אחרי שהלולאה הסתיימה, 'response' מחזיק את התשובה הסופית (טקסט)
+                            ai_response_text = response.text
+                            st.session_state.ui_messages.append({"role": "assistant", "content": ai_response_text})
+                            with st.chat_message("assistant"):
+                                st.markdown(ai_response_text)
+                            
+                            # עכשיו, אחרי שכל הפעולות בוצעו, נרענן את האפליקציה פעם אחת
+                            st.rerun()
+                            
+                            # --- סוף: התיקון ---
     
                         except Exception as e:
                             with st.chat_message("assistant"):
