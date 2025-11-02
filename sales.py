@@ -204,8 +204,7 @@ def to_pdf(results_dict):
         html_body += f"<h3>Total Revenue Breakdown by Product</h3><img src='{fig_to_base64_uri(fig_sum)}'>"
 
     # --- 3. הרכבת ה-HTML המלא ויצירת ה-PDF ---
-    full_html = f"<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Report</title>{html_style}</head><body>{full_html}</body></html>"
-    
+    full_html = f"<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Report</title>{html_style}</head><body>{html_body}</body></html>"    
     pdf_bytes = HTML(string=full_html).write_pdf()
     return pdf_bytes
 
@@ -817,7 +816,66 @@ def calculate_plan(is_m, is_l, is_g, market_gr, pen_y1, tt_m, tt_l, tt_g,
     
     # --- הקוד הכפול והשבור שהיה כאן - נמחק ---
     
+# ==================================
+# --- פונקציות עזר עבור AI TOOLS ---
+# ==================================
 
+def update_setting(setting_key: str, new_value: any):
+    """
+    פונקציית פייתון שמעדכנת ערך ב-Streamlit's session_state.
+    ה-AI יקרא לפונקציה הזו כדי לשנות הגדרות באפליקציה.
+    """
+    try:
+        # ננסה להמיר את הערך לסוג הנכון (למשל, אם ה-AI שולח "25" במקום 25.0)
+        original_value = st.session_state.get(setting_key)
+        if original_value is not None:
+            value_type = type(original_value)
+            try:
+                converted_value = value_type(new_value)
+                st.session_state[setting_key] = converted_value
+                return f"Success: Set {setting_key} to {converted_value}"
+            except Exception as e:
+                # אם ההמרה נכשלה, פשוט נכניס את הערך כמו שהוא
+                st.session_state[setting_key] = new_value
+                return f"Success (with fallback): Set {setting_key} to {new_value}. Conversion error: {e}"
+        else:
+            # אם המפתח לא קיים, צור אותו
+            st.session_state[setting_key] = new_value
+            return f"Success: Created and set {setting_key} to {new_value}"
+            
+    except Exception as e:
+        return f"Error: Could not set {setting_key}. Reason: {e}"
+
+# --- הגדרת הכלים (Tools) עבור Gemini ---
+# זה ה"תפריט" שאומר ל-AI אילו פונקציות הוא יכול להפעיל
+tools_schema = [
+    {
+        "name": "update_setting",
+        "description": "עדכון הגדרה, פרמטר, או ערך קלט באפליקציה. השתמש בזה כדי לשנות מחירים, עלויות, כמויות, או כל דבר שהמשתמש מבקש לשנות.",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "setting_key": {
+                    "type": "STRING",
+                    "description": "שם המפתח המדויק ב-session_state, למשל 'ip_unit_Product 1' או 'start_year'."
+                },
+                "new_value": {
+                    "type": "STRING", # שימוש ב-STRING מפשט את העבודה, נמיר סוגים בפייתון
+                    "description": "הערך החדש שיש להגדיר עבור המפתח."
+                }
+            },
+            "required": ["setting_key", "new_value"]
+        }
+    }
+]
+
+# מיפוי שם הפונקציה שה-AI קורא לה לפונקציית הפייתון האמיתית
+available_tools = {
+    "update_setting": update_setting,
+}
+# ==================================
+# --- סוף פונקציות ה-AI ---
+# ==================================
 def create_lead_plan(acquired_customers_plan, success_rates, time_aheads_in_quarters):
     # --- START OF CHANGE: Lead plan now creates its own extended timeline ---
     LEAD_START_YEAR = 2025
@@ -874,7 +932,137 @@ with st.sidebar:
             model_start_quarter = st.selectbox("Start Quarter", options=[1, 2, 3, 4], index=start_quarter_index, key="start_quarter")
     
         st.markdown("---") # קו מפריד
+    # --- הדבק את זה בתוך with st.sidebar: ---
+
+with st.expander("🤖 AI Analyst (Beta)", expanded=True):
     
+    # 1. אתחול ה-API (רק אם המפתח קיים)
+    if "GEMINI_API_KEY" not in st.secrets:
+        st.error("לא הוגדר מפתח GEMINI_API_KEY.")
+    else:
+        try:
+            genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+            
+            # אתחול המודל עם הגדרת הכלים
+            model = genai.GenerativeModel(
+                'gemini-1.5-pro-latest',
+                tools=tools_schema
+            )
+
+            # אתחול היסטוריית הצ'אט
+            if "chat_session" not in st.session_state:
+                st.session_state.chat_session = model.start_chat(history=[])
+            
+            # הצגת הודעות קודמות
+            for message in st.session_state.chat_session.history:
+                role = "assistant" if message.role == "model" else message.role
+                with st.chat_message(role):
+                    st.markdown(message.parts[0].text)
+
+            # 2. הכנת "הקונטקסט" עבור ה-AI (הנתונים)
+            data_context = "--- נתונים עדכניים ---\n"
+            if "results" in st.session_state and st.session_state.results:
+                data_context += "המשתמש הריץ ניתוח. להלן סיכום התוצאות:\n"
+                try:
+                    # איסוף נתוני סיכום
+                    product_list = [p for p in st.session_state.get('products', []) if p]
+                    all_revenues = {p: st.session_state.results[p]['annual_revenue'] for p in product_list if p in st.session_state.results}
+                    summary_plot_df = pd.DataFrame(all_revenues)
+                    if pd.api.types.is_datetime64_any_dtype(summary_plot_df.index):
+                         summary_plot_df.index = summary_plot_df.index.year
+                    data_context += "סיכום הכנסות שנתי (כלל המוצרים):\n"
+                    data_context += summary_plot_df.to_markdown() + "\n\n"
+                    
+                    # (אפשר להוסיף כאן עוד נתונים מפורטים אם רוצים)
+
+                except Exception as e:
+                    data_context += f"שגיאה באיסוף נתוני סיכום: {e}\n"
+            else:
+                data_context += "המשתמש עדיין לא הריץ ניתוח. הוא נמצא בשלב הגדרת הפרמטרים.\n"
+            
+            data_context += "--- סוף נתונים ---\n"
+            
+            # 3. קבלת שאלה מהמשתמש
+            if user_question := st.chat_input("שנה מחיר מוצר 1 ל-20..."):
+                with st.chat_message("user"):
+                    st.markdown(user_question)
+                
+                # 4. בניית ההנחיה (Prompt)
+                # זהו ה"מוח" של ה-AI. אנחנו נותנים לו את הנתונים העדכניים
+                # ואת רשימת מפתחות ה-session_state כדי שהוא ידע אילו הגדרות לשנות
+                
+                # יצירת רשימה של מפתחות שה-AI יכול לשנות
+                all_setting_keys = [k for k in st.session_state.keys() if isinstance(k, str) and not k.startswith(('_', 'chat_session', 'results', 'messages', 'FormSubmitter'))]
+                
+                prompt_context = f"""
+                אתה עוזר AI שמנהל דשבורד תוכנית עסקית ב-Streamlit.
+                
+                המשימות שלך:
+                1.  **לענות על שאלות:** ענה על שאלות המשתמש לגבי התוצאות (אם קיימות).
+                2.  **לשנות הגדרות:** אם המשתמש מבקש לשנות הגדרה (למשל "שנה מחיר", "הוסף שנה"), עליך להשתמש בכלי `update_setting`.
+
+                מידע חשוב:
+                -   הפורמט של מפתחות הגדרה עבור מוצרים הוא: `key_{product_name}`. 
+                    לדוגמה, המחיר ההתחלתי של "Product 1" הוא המפתח `ip_unit_Product 1`.
+                    העלות הראשונה של "Product 2" היא `cost_c_0_Product 2`.
+                -   פרמטרים גלובליים הם פשוטים, למשל `start_year`.
+                
+                ---
+                רשימת מפתחות ההגדרה הקיימים כרגע (לשימושך ב-`setting_key`):
+                {all_setting_keys}
+                ---
+                
+                הנתונים הנוכחיים מהדשבורד:
+                {data_context}
+                ---
+                
+                המשך את השיחה וענה לבקשת המשתמש:
+                """
+
+                # 5. שליחת הבקשה וקבלת תשובה
+                try:
+                    response = st.session_state.chat_session.send_message(prompt_context + user_question)
+                    
+                    # 6. בדיקה אם ה-AI רוצה להשתמש בכלי
+                    if response.parts[0].function_call:
+                        function_call = response.parts[0].function_call
+                        function_name = function_call.name
+                        
+                        if function_name in available_tools:
+                            function_to_call = available_tools[function_name]
+                            function_args = dict(function_call.args)
+                            
+                            # --- הפעלת הפונקציה ---
+                            with st.spinner(f"מבצע: {function_name}({function_args.get('setting_key')})..."):
+                                function_response = function_to_call(**function_args)
+                            
+                            # --- שליחת התוצאה חזרה ל-AI ---
+                            response = st.session_state.chat_session.send_message(
+                                [genai.types.FunctionResponse(name=function_name, response=function_response)]
+                            )
+                            
+                            # הצגת התשובה הסופית של ה-AI
+                            with st.chat_message("assistant"):
+                                st.markdown(response.parts[0].text)
+                            
+                            # --- רענון האפליקציה ---
+                            # זה קריטי כדי לראות את השינוי בסליידרים
+                            st.rerun()
+
+                        else:
+                            with st.chat_message("assistant"):
+                                st.error(f"ה-AI ניסה לקרוא לפונקציה לא קיימת: {function_name}")
+
+                    else:
+                        # 7. אם זו תשובה רגילה (טקסט)
+                        with st.chat_message("assistant"):
+                            st.markdown(response.parts[0].text)
+
+                except Exception as e:
+                    st.error(f"אירעה שגיאה ב-Gemini: {e}")
+
+        except Exception as e:
+            st.error(f"שגיאה באתחול מודל ה-AI: {e}")
     # --- Expander for User & Scenarios ---
     with st.expander("User & Scenarios", expanded=True):
         user_id = st.text_input("Enter your User ID (e.g., email)", key="user_id")
@@ -1432,95 +1620,6 @@ if st.session_state.results:
                 pdf_data = to_pdf(results)
                 if pdf_data:
                     st.download_button(label="📄 Download Full PDF Report", data=pdf_data, file_name="Full_Analysis_Report.pdf", use_container_width=True)
-# ... (כל הקוד הקיים שלך) ...
 
-# --- התחלה: בלוק ה-AI Analyst ---
-if "results" in st.session_state and st.session_state.results:
-    st.markdown("---")
-    st.header("🤖 AI Analyst")
-    st.subheader("שאל שאלות על התוצאות שחושבו")
-
-    # 1. אתחול ה-API (רק אם המפתח קיים)
-    if "GEMINI_API_KEY" not in st.secrets:
-        st.error("לא הוגדר מפתח GEMINI_API_KEY בסודות האפליקציה.")
-    else:
-        try:
-            genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-            model = genai.GenerativeModel('gemini-1.5-pro-latest') # הדגם החדש והחזק
-
-            # 2. הכנת "הקונטקסט" עבור ה-AI (הנתונים)
-            # נאסוף את כל הנתונים החשובים לטקסט אחד
-            data_context = "להלן נתוני התוכנית העסקית:\n\n"
-
-            # איסוף נתוני סיכום
-            if "summary_revenue_df" in locals(): # בדיקה שהמשתנה קיים
-                data_context += "טבלת סיכום הכנסות שנתיות (כלל המוצרים):\n"
-                data_context += summary_revenue_df.to_markdown() + "\n\n"
-
-            # איסוף נתונים פרטניים לכל מוצר
-            for product_name in st.session_state.results.keys():
-                if product_name == 'summary': continue
-
-                data_context += f"--- נתונים עבור: {product_name} ---\n"
-
-                # טבלת רווחיות
-                profit_summary_df = pd.DataFrame({
-                    "Total Revenue": st.session_state.results[product_name]['annual_revenue'],
-                    "Total Cost": st.session_state.results[product_name]['total_production_cost_q'].resample('YE').sum(),
-                    "Total Profit": st.session_state.results[product_name]['profit_q'].resample('YE').sum()
-                })
-                if pd.api.types.is_datetime64_any_dtype(profit_summary_df.index):
-                    profit_summary_df.index = profit_summary_df.index.year
-
-                data_context += "טבלת רווחיות שנתית (מוצר זה):\n"
-                data_context += profit_summary_df.to_markdown() + "\n"
-
-                # טבלת יעד מול ביצוע
-                if 'validation_df' in st.session_state.results[product_name]:
-                    data_context += "טבלת יעד מול ביצוע (מוצר זה):\n"
-                    data_context += st.session_state.results[product_name]['validation_df'].to_markdown() + "\n\n"
-
-
-            # 3. אתחול היסטוריית הצ'אט
-            if "messages" not in st.session_state:
-                st.session_state.messages = []
-
-            # הצגת הודעות קודמות
-            for message in st.session_state.messages:
-                with st.chat_message(message["role"]):
-                    st.markdown(message["content"])
-
-            # 4. קבלת שאלה מהמשתמש
-            if user_question := st.chat_input("לדוגמה: 'איזה מוצר הכי רווחי בשנה 3?'"):
-                st.session_state.messages.append({"role": "user", "content": user_question})
-                with st.chat_message("user"):
-                    st.markdown(user_question)
-
-                # 5. בניית ההנחיה (Prompt)
-                prompt = f"""
-                אתה יועץ עסקי ואנליסט נתונים בכיר. המשימה שלך היא לענות על שאלות בהתבסס על נתוני התוכנית העסקית הבאים.
-                עליך לבסס את תשובותיך *אך ורק* על הנתונים המסופקים.
-                היה תמציתי, מקצועי, והצג תובנות ברורות.
-
-                הנתונים:
-                {data_context}
-
-                שאלת המשתמש:
-                "{user_question}"
-                """
-
-                # 6. שליחת הבקשה וקבלת תשובה
-                with st.chat_message("assistant"):
-                    with st.spinner("חושב..."):
-                        response = model.generate_content(prompt)
-                        ai_answer = response.text
-                        st.markdown(ai_answer)
-                        st.session_state.messages.append({"role": "assistant", "content": ai_answer})
-
-        except Exception as e:
-            st.error(f"אירעה שגיאה בהתחברות ל-Gemini: {e}")
-            st.info("ודא שהוספת את 'GEMINI_API_KEY' להגדרות ה-Secrets ושהספרייה 'google-generativeai' מותקנת.")
-
-# --- סוף: בלוק ה-AI Analyst ---
 if not st.session_state.results:
     st.info("Set your parameters in the sidebar and click 'Run Full Analysis' to see the results.")
