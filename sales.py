@@ -14,6 +14,7 @@ from pptx.util import Inches, Pt
 from pptx.enum.text import PP_ALIGN
 from weasyprint import HTML
 import plotly.express as px
+import google.generativeai as genai
 
 # --- Page Config ---
 st.set_page_config(layout="wide", page_title="Advanced Business Plan Dashboard")
@@ -1431,6 +1432,95 @@ if st.session_state.results:
                 pdf_data = to_pdf(results)
                 if pdf_data:
                     st.download_button(label="📄 Download Full PDF Report", data=pdf_data, file_name="Full_Analysis_Report.pdf", use_container_width=True)
+# ... (כל הקוד הקיים שלך) ...
 
+# --- התחלה: בלוק ה-AI Analyst ---
+if "results" in st.session_state and st.session_state.results:
+    st.markdown("---")
+    st.header("🤖 AI Analyst")
+    st.subheader("שאל שאלות על התוצאות שחושבו")
+
+    # 1. אתחול ה-API (רק אם המפתח קיים)
+    if "GEMINI_API_KEY" not in st.secrets:
+        st.error("לא הוגדר מפתח GEMINI_API_KEY בסודות האפליקציה.")
+    else:
+        try:
+            genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+            model = genai.GenerativeModel('gemini-1.5-pro-latest') # הדגם החדש והחזק
+
+            # 2. הכנת "הקונטקסט" עבור ה-AI (הנתונים)
+            # נאסוף את כל הנתונים החשובים לטקסט אחד
+            data_context = "להלן נתוני התוכנית העסקית:\n\n"
+
+            # איסוף נתוני סיכום
+            if "summary_revenue_df" in locals(): # בדיקה שהמשתנה קיים
+                data_context += "טבלת סיכום הכנסות שנתיות (כלל המוצרים):\n"
+                data_context += summary_revenue_df.to_markdown() + "\n\n"
+
+            # איסוף נתונים פרטניים לכל מוצר
+            for product_name in st.session_state.results.keys():
+                if product_name == 'summary': continue
+
+                data_context += f"--- נתונים עבור: {product_name} ---\n"
+
+                # טבלת רווחיות
+                profit_summary_df = pd.DataFrame({
+                    "Total Revenue": st.session_state.results[product_name]['annual_revenue'],
+                    "Total Cost": st.session_state.results[product_name]['total_production_cost_q'].resample('YE').sum(),
+                    "Total Profit": st.session_state.results[product_name]['profit_q'].resample('YE').sum()
+                })
+                if pd.api.types.is_datetime64_any_dtype(profit_summary_df.index):
+                    profit_summary_df.index = profit_summary_df.index.year
+
+                data_context += "טבלת רווחיות שנתית (מוצר זה):\n"
+                data_context += profit_summary_df.to_markdown() + "\n"
+
+                # טבלת יעד מול ביצוע
+                if 'validation_df' in st.session_state.results[product_name]:
+                    data_context += "טבלת יעד מול ביצוע (מוצר זה):\n"
+                    data_context += st.session_state.results[product_name]['validation_df'].to_markdown() + "\n\n"
+
+
+            # 3. אתחול היסטוריית הצ'אט
+            if "messages" not in st.session_state:
+                st.session_state.messages = []
+
+            # הצגת הודעות קודמות
+            for message in st.session_state.messages:
+                with st.chat_message(message["role"]):
+                    st.markdown(message["content"])
+
+            # 4. קבלת שאלה מהמשתמש
+            if user_question := st.chat_input("לדוגמה: 'איזה מוצר הכי רווחי בשנה 3?'"):
+                st.session_state.messages.append({"role": "user", "content": user_question})
+                with st.chat_message("user"):
+                    st.markdown(user_question)
+
+                # 5. בניית ההנחיה (Prompt)
+                prompt = f"""
+                אתה יועץ עסקי ואנליסט נתונים בכיר. המשימה שלך היא לענות על שאלות בהתבסס על נתוני התוכנית העסקית הבאים.
+                עליך לבסס את תשובותיך *אך ורק* על הנתונים המסופקים.
+                היה תמציתי, מקצועי, והצג תובנות ברורות.
+
+                הנתונים:
+                {data_context}
+
+                שאלת המשתמש:
+                "{user_question}"
+                """
+
+                # 6. שליחת הבקשה וקבלת תשובה
+                with st.chat_message("assistant"):
+                    with st.spinner("חושב..."):
+                        response = model.generate_content(prompt)
+                        ai_answer = response.text
+                        st.markdown(ai_answer)
+                        st.session_state.messages.append({"role": "assistant", "content": ai_answer})
+
+        except Exception as e:
+            st.error(f"אירעה שגיאה בהתחברות ל-Gemini: {e}")
+            st.info("ודא שהוספת את 'GEMINI_API_KEY' להגדרות ה-Secrets ושהספרייה 'google-generativeai' מותקנת.")
+
+# --- סוף: בלוק ה-AI Analyst ---
 if not st.session_state.results:
     st.info("Set your parameters in the sidebar and click 'Run Full Analysis' to see the results.")
