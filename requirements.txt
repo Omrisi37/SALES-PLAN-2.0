@@ -13,4 +13,4 @@ pytz>=2024.1
 python-pptx
 weasyprint
 plotly
-google-generativeai
+google-generativeai>=0.7.0
