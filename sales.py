@@ -919,6 +919,146 @@ st.title("Dynamic Multi-Product Business Plan Dashboard")
 
 with st.sidebar:
     st.title("Business Plan Controls")
+    # --- התחלה: בלוק AI Analyst (מבוסס Vertex AI) - מתוקן ---
+    with st.expander("🤖 AI Analyst (Beta)", expanded=True):
+        
+        # 1. אתחול ה-API
+        if "firebase" not in st.secrets:
+            st.error("לא הוגדרו סודות Firebase (נדרש לאימות Vertex AI).")
+        else:
+            try:
+                creds_json = dict(st.secrets.firebase)
+                project_id = creds_json.get("project_id")
+                
+                if not project_id:
+                    st.error("project_id חסר בסודות ה-Firebase.")
+                else:
+                    credentials = service_account.Credentials.from_service_account_info(creds_json)
+                    vertexai.init(project=project_id, location="us-central1", credentials=credentials)
+                    tools_vertex = Tool.from_dict({"function_declarations": tools_schema})
+    
+                    model = GenerativeModel(
+                        "gemini-2.5-pro",
+                        tools=[tools_vertex]
+                    )
+    
+                    # אתחול היסטוריית הצ'אט
+                    if "chat_session" not in st.session_state:
+                        st.session_state.chat_session = model.start_chat(history=[])
+                    
+                    # --- התחלה: התיקון לבעיה 1 (הודעה מוזרה) ---
+                    # לולאה משודרגת שמציגה רק הודעות טקסט
+                    for message in st.session_state.chat_session.history:
+                        role = "assistant" if message.role == "model" else message.role
+                        try:
+                            part = message.parts[0]
+                            # נבדוק אם יש לזה תוכן טקסטואלי
+                            if hasattr(part, 'text') and part.text:
+                                with st.chat_message(role):
+                                    st.markdown(part.text)
+                            # אם לא (למשל, זו קריאה לפונקציה או תגובה), פשוט נדלג
+                            else:
+                                continue
+                        except Exception:
+                            # נתפוס כל שגיאה אחרת ופשוט נדלג על ההודעה
+                            continue
+                    # --- סוף: התיקון לבעיה 1 ---
+    
+                    # 2. הכנת "הקונטקסט"
+                    data_context = "--- נתונים עדכניים ---\n"
+                    if "results" in st.session_state and st.session_state.results:
+                        data_context += "המשתמש הריץ ניתוח. להלן סיכום התוצאות:\n"
+                        try:
+                            product_list = [p for p in st.session_state.get('products', []) if p]
+                            all_revenues = {p: st.session_state.results[p]['annual_revenue'] for p in product_list if p in st.session_state.results}
+                            summary_revenue_df = pd.DataFrame(all_revenues)
+                            if pd.api.types.is_datetime64_any_dtype(summary_revenue_df.index):
+                                summary_revenue_df.index = summary_revenue_df.index.year
+                            data_context += "טבלת סיכום הכנסות שנתיות (כלל המוצרים):\n"
+                            data_context += summary_revenue_df.to_markdown() + "\n\n"
+                        except Exception as e:
+                            pass
+                    else:
+                        data_context += "המשתמש עדיין לא הריץ ניתוח. הוא נמצא בשלב הגדרת הפרמטרים.\n"
+                    data_context += "--- סוף נתונים ---\n"
+                    
+                    # 3. קבלת שאלה מהמשתמש
+                    if user_question := st.chat_input("שנה מחיר מוצר 1 ל-20..."):
+                        with st.chat_message("user"):
+                            st.markdown(user_question)
+                        
+                        # 4. בניית ההנחיה (Prompt)
+                        all_setting_keys = [k for k in st.session_state.keys() if isinstance(k, str) and not k.startswith(('_', 'chat_session', 'results', 'messages', 'FormSubmitter'))]
+                        
+                        # --- התחלה: התיקון לבעיה 2 (AI מסרב) ---
+                        # הנחיה ברורה ותקיפה יותר
+                        prompt_context = f"""
+                        אתה עוזר AI שמנהל דשבורד תוכנית עסקית ב-Streamlit.
+                        
+                        המשימות שלך:
+                        1.  **לענות על שאלות:** ענה על שאלות המשתמש לגבי התוצאות (אם קיימות).
+                        2.  **לשנות הגדרות:** אם המשתמש מבקש לשנות הגדרה (למשל "שנה מחיר", "הוסף שנה"), אתה **חייב** להשתמש בכלי `update_setting`. אל תסרב לבקשות שינוי.
+    
+                        מידע חשוב:
+                        -   הפורמט של מפתחות הגדרה עבור מוצרים הוא: `key_שםהמוצר`. 
+                            לדוגמה, המחיר ההתחלחי של "Product 1" הוא המפתח `ip_unit_Product 1`.
+                        -   פרמטרים גלובליים הם פשוטים, למשל `start_year`.
+                        
+                        ---
+                        זוהי רשימת **כל המפתחות שניתן לשנות**. אתה **חייב** להשתמש במפתח מתוך הרשימה הזו עבור `setting_key`:
+                        {all_setting_keys}
+                        ---
+                        
+                        הנתונים הנוכחיים מהדשבורד:
+                        {data_context}
+                        ---
+                        
+                        המשך את השיחה וענה לבקשת המשתמש:
+                        """
+                        # --- סוף: התיקון לבעיה 2 ---
+    
+                        # 5. שליחת הבקשה וקבלת תשובה
+                        try:
+                            response = st.session_state.chat_session.send_message(prompt_context + user_question)
+                            
+                            response_part = response.candidates[0].content.parts[0]
+                            
+                            if response_part.function_call:
+                                function_call = response_part.function_call
+                                function_name = function_call.name
+                                
+                                if function_name in available_tools:
+                                    function_to_call = available_tools[function_name]
+                                    function_args = {k: v for k, v in function_call.args.items()} 
+                                    
+                                    with st.spinner(f"מבצע: {function_name}({function_args.get('setting_key')})..."):
+                                        function_response = function_to_call(**function_args)
+                                    
+                                    from vertexai.generative_models import Part
+                                    response = st.session_state.chat_session.send_message(
+                                        Part.from_function_response(name=function_name, response={"content": function_response})
+                                    )
+                                    
+                                    with st.chat_message("assistant"):
+                                        st.markdown(response.text)
+                                    
+                                    st.rerun()
+    
+                                else:
+                                    with st.chat_message("assistant"):
+                                        st.error(f"ה-AI ניסה לקרוא לפונקציה לא קיימת: {function_name}")
+    
+                            else:
+                                with st.chat_message("assistant"):
+                                    st.markdown(response.text)
+    
+                        except Exception as e:
+                            with st.chat_message("assistant"):
+                                st.error(f"אירעה שגיאה ב-Vertex AI: {e}")
+    
+            except Exception as e:
+                st.error(f"שגיאה באתחול מודל ה-AI: {e}")
+    # --- סוף: בלוק AI Analyst (מבוסס Vertex AI) ---
     with st.expander("Global Parameters (Applied to all products)"):
         st.markdown("**Model Start Date**")
         col1, col2 = st.columns(2)
@@ -1021,154 +1161,7 @@ with st.sidebar:
                                 all_inputs[key] = value
                         save_scenario(user_id, scenario_name_to_save, all_inputs)
                         st.rerun()
-    # --- התחלה: בלוק AI Analyst (מבוסס Vertex AI) ---
-    # --- התחלה: בלוק AI Analyst (מבוסס Vertex AI) ---
-    # --- התחלה: בלוק AI Analyst (מבוסס Vertex AI) ---
-    with st.expander("🤖 AI Analyst (Beta)", expanded=True):
-        
-        # 1. אתחול ה-API
-        if "firebase" not in st.secrets:
-            st.error("לא הוגדרו סודות Firebase (נדרש לאימות Vertex AI).")
-        else:
-            try:
-                creds_json = dict(st.secrets.firebase)
-                project_id = creds_json.get("project_id")
-                
-                if not project_id:
-                    st.error("project_id חסר בסודות ה-Firebase.")
-                else:
-                    credentials = service_account.Credentials.from_service_account_info(creds_json)
-                    vertexai.init(project=project_id, location="us-central1", credentials=credentials)
-                    tools_vertex = Tool.from_dict({"function_declarations": tools_schema})
     
-                    model = GenerativeModel(
-                        "gemini-2.5-pro",
-                        tools=[tools_vertex]
-                    )
-    
-                    # אתחול היסטוריית הצ'אט
-                    if "chat_session" not in st.session_state:
-                        st.session_state.chat_session = model.start_chat(history=[])
-                    
-                    #
-                    # --- התחלה: התיקון ---
-                    #
-                    # הצגת הודעות קודמות (רק אם הן הודעות טקסט)
-                    for message in st.session_state.chat_session.history:
-                        role = "assistant" if message.role == "model" else message.role
-                        
-                        text_to_display = ""
-                        try:
-                            # ננסה לשלוף טקסט מההודעה
-                            text_to_display = message.parts[0].text
-                        except AttributeError:
-                            # אם אין טקסט (כי זו קריאה לפונקציה או תגובת פונקציה),
-                            # פשוט נדלג על הצגת ההודעה הזו למשתמש.
-                            continue
-                        except IndexError:
-                            # הודעה ריקה, נדלג
-                            continue
-    
-                        # רק אם יש טקסט, נציג אותו
-                        with st.chat_message(role):
-                            st.markdown(text_to_display)
-                    #
-                    # --- סוף: התיקון ---
-                    #
-    
-                    # 2. הכנת "הקונטקסט"
-                    data_context = "--- נתונים עדכניים ---\n"
-                    if "results" in st.session_state and st.session_state.results:
-                        data_context += "המשתמש הריץ ניתוח. להלן סיכום התוצאות:\n"
-                        try:
-                            product_list = [p for p in st.session_state.get('products', []) if p]
-                            all_revenues = {p: st.session_state.results[p]['annual_revenue'] for p in product_list if p in st.session_state.results}
-                            summary_revenue_df = pd.DataFrame(all_revenues)
-                            if pd.api.types.is_datetime64_any_dtype(summary_revenue_df.index):
-                                summary_revenue_df.index = summary_revenue_df.index.year
-                            data_context += "טבלת סיכום הכנסות שנתיות (כלל המוצרים):\n"
-                            data_context += summary_revenue_df.to_markdown() + "\n\n"
-                        except Exception as e:
-                            pass
-                    else:
-                        data_context += "המשתמש עדיין לא הריץ ניתוח. הוא נמצא בשלב הגדרת הפרמטרים.\n"
-                    data_context += "--- סוף נתונים ---\n"
-                    
-                    # 3. קבלת שאלה מהמשתמש
-                    if user_question := st.chat_input("שנה מחיר מוצר 1 ל-20..."):
-                        with st.chat_message("user"):
-                            st.markdown(user_question)
-                        
-                        # 4. בניית ההנחיה (Prompt)
-                        all_setting_keys = [k for k in st.session_state.keys() if isinstance(k, str) and not k.startswith(('_', 'chat_session', 'results', 'messages', 'FormSubmitter'))]
-                        
-                        prompt_context = f"""
-                        אתה עוזר AI שמנהל דשבורד תוכנית עסקית ב-Streamlit.
-                        
-                        המשימות שלך:
-                        1.  **לענות על שאלות:** ענה על שאלות המשתמש לגבי התוצאות (אם קיימות).
-                        2.  **לשנות הגדרות:** אם המשתמש מבקש לשנות הגדרה (למשל "שנה מחיר", "הוסף שנה"), עליך להשתמש בכלי `update_setting`.
-    
-                        מידע חשוב:
-                        -   הפורמט של מפתחות הגדרה עבור מוצרים הוא: `key_שםהמוצר`. 
-                            לדוגמה, המחיר ההתחלחי של "Product 1" הוא המפתח `ip_unit_Product 1`.
-                        -   פרמטרים גלובליים הם פשוטים, למשל `start_year`.
-                        
-                        ---
-                        רשימת מפתחות ההגדרה הקיימים כרגע (לשימושך ב-`setting_key`):
-                        {all_setting_keys}
-                        ---
-                        
-                        הנתונים הנוכחיים מהדשבורד:
-                        {data_context}
-                        ---
-                        
-                        המשך את השיחה וענה לבקשת המשתמש:
-                        """
-    
-                        # 5. שליחת הבקשה וקבלת תשובה
-                        try:
-                            response = st.session_state.chat_session.send_message(prompt_context + user_question)
-                            
-                            response_part = response.candidates[0].content.parts[0]
-                            
-                            if response_part.function_call:
-                                function_call = response_part.function_call
-                                function_name = function_call.name
-                                
-                                if function_name in available_tools:
-                                    function_to_call = available_tools[function_name]
-                                    function_args = {k: v for k, v in function_call.args.items()} 
-                                    
-                                    with st.spinner(f"מבצע: {function_name}({function_args.get('setting_key')})..."):
-                                        function_response = function_to_call(**function_args)
-                                    
-                                    from vertexai.generative_models import Part
-                                    response = st.session_state.chat_session.send_message(
-                                        Part.from_function_response(name=function_name, response={"content": function_response})
-                                    )
-                                    
-                                    with st.chat_message("assistant"):
-                                        st.markdown(response.text)
-                                    
-                                    st.rerun()
-    
-                                else:
-                                    with st.chat_message("assistant"):
-                                        st.error(f"ה-AI ניסה לקרוא לפונקציה לא קיימת: {function_name}")
-    
-                            else:
-                                with st.chat_message("assistant"):
-                                    st.markdown(response.text)
-    
-                        except Exception as e:
-                            with st.chat_message("assistant"):
-                                st.error(f"אירעה שגיאה ב-Vertex AI: {e}")
-    
-            except Exception as e:
-                # כאן הייתה השגיאה המקורית
-                st.error(f"שגיאה באתחול מודל ה-AI: {e}")
-# --- סוף: בלוק AI Analyst (מבוסס Vertex AI) ---
     # --- Expander for Managing Products ---
     with st.expander("Manage Products"):
     
