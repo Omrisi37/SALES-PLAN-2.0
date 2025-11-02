@@ -997,7 +997,7 @@ with st.sidebar:
     
                     # 2. אתחול המודל עם הנחיית המערכת
                     tools_vertex = Tool.from_dict({"function_declarations": tools_schema})
-                    model = GenerModel(
+                    model = GenerativeModel(
                         "gemini-2.5-pro",
                         tools=[tools_vertex],
                         system_instruction=system_instruction_text
