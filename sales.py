@@ -827,20 +827,33 @@ def update_setting(setting_key: str, new_value: any):
     ה-AI יקרא לפונקציה הזו כדי לשנות הגדרות באפליקציה.
     """
     try:
-        # ננסה להמיר את הערך לסוג הנכון (למשל, אם ה-AI שולח "25" במקום 25.0)
+        # --- התחלה: תיקון לבעיית "מוצר לכל אות" ---
+        if setting_key == 'products':
+            # ה-AI שולח טקסט שנראה כמו רשימה: "[\"ZOZO\", \"RORI\"]"
+            try:
+                # נשתמש ב-json.loads כדי לפענח את הטקסט לרשימה אמיתית
+                converted_value = json.loads(new_value)
+                if not isinstance(converted_value, list):
+                    # אם זה לא רשימה (למשל, רק "ZOZO"), נעטוף ברשימה
+                    converted_value = [str(converted_value)]
+            except json.JSONDecodeError:
+                # אם הפענוח נכשל, נניח שהכוונה היא למוצר בודד
+                converted_value = [str(new_value)]
+            
+            st.session_state[setting_key] = converted_value
+            return f"Success: Product list set to {converted_value}"
+        # --- סוף: התיקון ---
+
+        # לוגיקה קודמת עבור כל שאר ההגדרות (מספרים, טקסט רגיל)
         original_value = st.session_state.get(setting_key)
         if original_value is not None:
+            # ננסה להמיר לסוג המקורי
             value_type = type(original_value)
-            try:
-                converted_value = value_type(new_value)
-                st.session_state[setting_key] = converted_value
-                return f"Success: Set {setting_key} to {converted_value}"
-            except Exception as e:
-                # אם ההמרה נכשלה, פשוט נכניס את הערך כמו שהוא
-                st.session_state[setting_key] = new_value
-                return f"Success (with fallback): Set {setting_key} to {new_value}. Conversion error: {e}"
+            converted_value = value_type(new_value)
+            st.session_state[setting_key] = converted_value
+            return f"Success: Set {setting_key} to {converted_value}"
         else:
-            # אם המפתח לא קיים, צור אותו
+            # אם המפתח לא קיים, ניצור אותו
             st.session_state[setting_key] = new_value
             return f"Success: Created and set {setting_key} to {new_value}"
             
@@ -920,7 +933,8 @@ st.title("Dynamic Multi-Product Business Plan Dashboard")
 with st.sidebar:
     st.title("Business Plan Controls")
     # --- התחלה: בלוק AI Analyst (מבוסס Vertex AI) - תמיכה בריבוי פעולות ---
-    with st.expander("🤖 AI Analyst", expanded=True):
+    # --- התחלה: בלוק AI Analyst (מבוסס Vertex AI) - תיקון Multi-Part ---
+    with st.expander("🤖 AI Analyst (Beta)", expanded=True):
         
         # 1. אתחול ה-API
         if "firebase" not in st.secrets:
@@ -967,6 +981,7 @@ with st.sidebar:
                     -   הפורמט של מפתחות הגדרה עבור מוצרים הוא: `key_שםהמוצר`. 
                         לדוגמה, המחיר ההתחלחי של "Product 1" הוא המפתח `ip_unit_Product 1`.
                     -   פרמטרים גלובליים הם פשוטים, למשל `start_year`.
+                    -   המפתח לרשימת המוצרים כולה הוא `products`.
                     
                     ---
                     זוהי רשימת **כל המפתחות שניתן לשנות**. אתה **חייב** להשתמש במפתח מתוך הרשימה הזו עבור `setting_key`:
@@ -982,8 +997,8 @@ with st.sidebar:
     
                     # 2. אתחול המודל עם הנחיית המערכת
                     tools_vertex = Tool.from_dict({"function_declarations": tools_schema})
-                    model = GenerativeModel(
-                        "gemini-2.5-pro",
+                    model = GenerModel(
+                        "gemini-1.0-pro",
                         tools=[tools_vertex],
                         system_instruction=system_instruction_text
                     )
@@ -1011,47 +1026,67 @@ with st.sidebar:
                         try:
                             response = st.session_state.chat_session.send_message(user_question)
                             
-                            # --- התחלה: התיקון (לולאת פונקציות) ---
+                            # --- התחלה: התיקון ל-Multiple Parts ---
                             
-                            # ניכנס ללולאה שתרוץ כל עוד ה-AI מבקש להפעיל פונקציות
-                            while response.candidates[0].content.parts[0].function_call:
-                                function_call = response.candidates[0].content.parts[0].function_call
-                                function_name = function_call.name
-                                
-                                if function_name in available_tools:
-                                    function_to_call = available_tools[function_name]
-                                    function_args = {k: v for k, v in function_call.args.items()} 
-                                    
-                                    with st.spinner(f"מבצע: {function_name}({function_args.get('setting_key')})..."):
-                                        function_response_content = function_to_call(**function_args)
-                                    
-                                    # נשלח את התוצאה של הפונקציה חזרה ל-AI
-                                    from vertexai.generative_models import Part
-                                    response = st.session_state.chat_session.send_message(
-                                        Part.from_function_response(name=function_name, response={"content": function_response_content})
-                                    )
-                                    # הלולאה תבדוק כעת את התגובה החדשה של ה-AI.
-                                    # אם זו עוד פונקציה, הלולאה תמשיך. אם זה טקסט, היא תסתיים.
+                            # נחפש פקודה *בכל* החלקים של התשובה
+                            function_call_part = None
+                            for part in response.candidates[0].content.parts:
+                                if hasattr(part, 'function_call') and part.function_call:
+                                    function_call_part = part
+                                    break # מצאנו פקודה, נפסיק לחפש
     
-                                else:
-                                    with st.chat_message("assistant"):
-                                        st.error(f"ה-AI ניסה לקרוא לפונקציה לא קיימת: {function_name}")
-                                    break # שבור את הלולאה אם יש שגיאה
-                            
-                            # אחרי שהלולאה הסתיימה, 'response' מחזיק את התשובה הסופית (טקסט)
-                            ai_response_text = response.text
-                            st.session_state.ui_messages.append({"role": "assistant", "content": ai_response_text})
-                            with st.chat_message("assistant"):
-                                st.markdown(ai_response_text)
-                            
-                            # עכשיו, אחרי שכל הפעולות בוצעו, נרענן את האפליקציה פעם אחת
-                            st.rerun()
+                            # --- מקרה 1: התשובה היא פקודה (או סדרת פקודות) ---
+                            if function_call_part:
+                                current_response = response
+                                # ניכנס ללולאה שתרוץ כל עוד ה-AI מבקש להפעיל פונקציות
+                                while function_call_part:
+                                    function_call = function_call_part.function_call
+                                    function_name = function_call.name
+                                    
+                                    if function_name in available_tools:
+                                        function_to_call = available_tools[function_name]
+                                        function_args = {k: v for k, v in function_call.args.items()} 
+                                        
+                                        with st.spinner(f"מבצע: {function_name}({function_args.get('setting_key')})..."):
+                                            function_response_content = function_to_call(**function_args)
+                                        
+                                        from vertexai.generative_models import Part
+                                        current_response = st.session_state.chat_session.send_message(
+                                            Part.from_function_response(name=function_name, response={"content": function_response_content})
+                                        )
+    
+                                        # נבדוק את התשובה *החדשה* אם היא מכילה *עוד* פקודה
+                                        function_call_part = None
+                                        for part in current_response.candidates[0].content.parts:
+                                            if hasattr(part, 'function_call') and part.function_call:
+                                                function_call_part = part
+                                                break
+                                    else:
+                                        with st.chat_message("assistant"):
+                                            st.error(f"ה-AI ניסה לקרוא לפונקציה לא קיימת: {function_name}")
+                                        break # שבור את הלולאה אם יש שגיאה
+                                
+                                # אחרי שהלולאה הסתיימה, 'current_response' מחזיק את התשובה הסופית (טקסט)
+                                ai_response_text = current_response.text
+                                st.session_state.ui_messages.append({"role": "assistant", "content": ai_response_text})
+                                with st.chat_message("assistant"):
+                                    st.markdown(ai_response_text)
+                                
+                                st.rerun()
+    
+                            # --- מקרה 2: התשובה היא טקסט רגיל ---
+                            else:
+                                ai_response_text = response.text # .text בטוח יעבוד כאן
+                                st.session_state.ui_messages.append({"role": "assistant", "content": ai_response_text})
+                                with st.chat_message("assistant"):
+                                    st.markdown(ai_response_text)
                             
                             # --- סוף: התיקון ---
     
                         except Exception as e:
                             with st.chat_message("assistant"):
                                 st.error(f"אירעה שגיאה ב-Vertex AI: {e}")
+                                st.exception(e)
     
             except Exception as e:
                 st.error(f"שגיאה באתחול מודל ה-AI: {e}")
