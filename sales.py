@@ -413,7 +413,7 @@ def deserialize_from_firestore(value):
 # --- Session State Initialization ---
 if 'products' not in st.session_state:
     # !!! שינוי כאן: מוצרים גנריים כברירת מחדל !!!
-    st.session_state.products = ["Product 1", "Product 2"]
+    st.session_state.products = ["Product 1"]
 if 'results' not in st.session_state:
     st.session_state.results = {}
 
