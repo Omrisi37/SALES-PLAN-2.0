@@ -934,7 +934,9 @@ with st.sidebar:
         st.markdown("---") # קו מפריד
     # --- הדבק את זה בתוך with st.sidebar: ---
 
-with st.expander("🤖 AI Analyst (Beta)", expanded=True):
+# --- הדבק את זה בתוך with st.sidebar: ---
+
+with st.expander("🤖 AI Analyst", expanded=True):
     
     # 1. אתחול ה-API (רק אם המפתח קיים)
     if "GEMINI_API_KEY" not in st.secrets:
@@ -963,20 +965,22 @@ with st.expander("🤖 AI Analyst (Beta)", expanded=True):
             data_context = "--- נתונים עדכניים ---\n"
             if "results" in st.session_state and st.session_state.results:
                 data_context += "המשתמש הריץ ניתוח. להלן סיכום התוצאות:\n"
+                
+                # --- התחלה: חישוב סיכום נתונים (תיקון 2) ---
                 try:
-                    # איסוף נתוני סיכום
                     product_list = [p for p in st.session_state.get('products', []) if p]
                     all_revenues = {p: st.session_state.results[p]['annual_revenue'] for p in product_list if p in st.session_state.results}
-                    summary_plot_df = pd.DataFrame(all_revenues)
-                    if pd.api.types.is_datetime64_any_dtype(summary_plot_df.index):
-                         summary_plot_df.index = summary_plot_df.index.year
-                    data_context += "סיכום הכנסות שנתי (כלל המוצרים):\n"
-                    data_context += summary_plot_df.to_markdown() + "\n\n"
+                    summary_revenue_df = pd.DataFrame(all_revenues)
+                    if pd.api.types.is_datetime64_any_dtype(summary_revenue_df.index):
+                         summary_revenue_df.index = summary_revenue_df.index.year
                     
-                    # (אפשר להוסיף כאן עוד נתונים מפורטים אם רוצים)
-
+                    data_context += "טבלת סיכום הכנסות שנתיות (כלל המוצרים):\n"
+                    data_context += summary_revenue_df.to_markdown() + "\n\n"
                 except Exception as e:
-                    data_context += f"שגיאה באיסוף נתוני סיכום: {e}\n"
+                    # זה בסדר אם אין נתונים עדיין
+                    pass
+                # --- סוף: חישוב סיכום נתונים ---
+
             else:
                 data_context += "המשתמש עדיין לא הריץ ניתוח. הוא נמצא בשלב הגדרת הפרמטרים.\n"
             
@@ -988,10 +992,6 @@ with st.expander("🤖 AI Analyst (Beta)", expanded=True):
                     st.markdown(user_question)
                 
                 # 4. בניית ההנחיה (Prompt)
-                # זהו ה"מוח" של ה-AI. אנחנו נותנים לו את הנתונים העדכניים
-                # ואת רשימת מפתחות ה-session_state כדי שהוא ידע אילו הגדרות לשנות
-                
-                # יצירת רשימה של מפתחות שה-AI יכול לשנות
                 all_setting_keys = [k for k in st.session_state.keys() if isinstance(k, str) and not k.startswith(('_', 'chat_session', 'results', 'messages', 'FormSubmitter'))]
                 
                 prompt_context = f"""
@@ -1002,8 +1002,8 @@ with st.expander("🤖 AI Analyst (Beta)", expanded=True):
                 2.  **לשנות הגדרות:** אם המשתמש מבקש לשנות הגדרה (למשל "שנה מחיר", "הוסף שנה"), עליך להשתמש בכלי `update_setting`.
 
                 מידע חשוב:
-                -   הפורמט של מפתחות הגדרה עבור מוצרים הוא: `key_{product_name}`. 
-                    לדוגמה, המחיר ההתחלתי של "Product 1" הוא המפתח `ip_unit_Product 1`.
+                -   הפורמט של מפתחות הגדרה עבור מוצרים הוא: `key_שםהמוצר`. 
+                    לדוגמה, המחיר ההתחלתי של "Product 1" הוא המפתח `ip_unit_Product 1`. (תיקון 1)
                     העלות הראשונה של "Product 2" היא `cost_c_0_Product 2`.
                 -   פרמטרים גלובליים הם פשוטים, למשל `start_year`.
                 
@@ -1046,7 +1046,6 @@ with st.expander("🤖 AI Analyst (Beta)", expanded=True):
                                 st.markdown(response.parts[0].text)
                             
                             # --- רענון האפליקציה ---
-                            # זה קריטי כדי לראות את השינוי בסליידרים
                             st.rerun()
 
                         else:
@@ -1059,7 +1058,8 @@ with st.expander("🤖 AI Analyst (Beta)", expanded=True):
                             st.markdown(response.parts[0].text)
 
                 except Exception as e:
-                    st.error(f"אירעה שגיאה ב-Gemini: {e}")
+                    with st.chat_message("assistant"):
+                        st.error(f"אירעה שגיאה ב-Gemini: {e}")
 
         except Exception as e:
             st.error(f"שגיאה באתחול מודל ה-AI: {e}")
