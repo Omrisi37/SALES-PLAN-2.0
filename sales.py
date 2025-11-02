@@ -964,15 +964,73 @@ with st.sidebar:
 
     # --- Expander for Managing Products ---
     with st.expander("Manage Products"):
+    
+        # --- פונקציית עזר פנימית לניקוי ה-state ---
+        def remove_product_from_state(product_to_remove):
+            # 1. הסרה מרשימת המוצרים הראשית
+            if product_to_remove in st.session_state.products:
+                st.session_state.products.remove(product_to_remove)
+            
+            # 2. הסרה מתוצאות הריצה (אם קיימות)
+            if product_to_remove in st.session_state.results:
+                del st.session_state.results[product_to_remove]
+                
+            # 3. ניקוי כל המפתחות המשויכים למוצר מה-session_state
+            keys_to_delete = []
+            for key in st.session_state.keys():
+                if isinstance(key, str) and key.endswith(f"_{product_to_remove}"):
+                    keys_to_delete.append(key)
+            
+            for key in keys_to_delete:
+                try:
+                    del st.session_state[key]
+                except KeyError:
+                    pass # כבר נמחק, הכל בסדר
+        # --- סוף פונקציית העזר ---
+    
+        # לולאה על עותק של הרשימה כדי לאפשר שינויים תוך כדי
         current_products = st.session_state.get('products', []).copy()
-        for i, product_name in enumerate(current_products):
-            st.session_state.products[i] = st.text_input(f"Product {i+1} Name", value=product_name, key=f"pname_{i}")
         
+        # אם אין מוצרים, הצג הודעה
+        if not current_products:
+            st.caption("אין מוצרים. הוסף מוצר חדש למטה.")
+    
+        # הצגת המוצרים הקיימים עם אפשרות מחיקה
+        for i, product_name in enumerate(current_products):
+            col1, col2 = st.columns([0.8, 0.2]) # עמודה רחבה לשם, צרה לכפתור
+            
+            with col1:
+                # עדכון שם המוצר
+                new_name = st.text_input(
+                    f"Product {i+1} Name", 
+                    value=product_name, 
+                    key=f"pname_{i}"
+                )
+                # אם השם שונה, עדכן אותו ברשימה הראשית
+                if new_name != product_name and new_name:
+                    st.session_state.products[i] = new_name
+                    # (כאן אפשר להוסיף לוגיקה מורכבת יותר של שינוי שם גם ב-keys)
+                    # כרגע נשאיר פשוט - המשתמש יצטרך להריץ מחדש
+            
+            with col2:
+                st.write("") # טריק קטן ליישור אנכי
+                st.write("")
+                st.button(
+                    "✖️", # כפתור הסרה
+                    key=f"remove_prod_{i}", 
+                    on_click=remove_product_from_state, # קריאה לפונקציית הניקוי
+                    args=(product_name,), # הפרמטר שיועבר לפונקציה
+                    help=f"הסר את {product_name}"
+                )
+    
+        st.markdown("---")
+        
+        # לוגיקה להוספת מוצר חדש (זהה לקודם)
         new_product_name = st.text_input("New Product Name", key="new_product_name_input")
         if st.button("Add Product") and new_product_name:
             if new_product_name not in st.session_state.products:
                 st.session_state.products.append(new_product_name)
-                st.rerun()
+                st.rerun() # רענון מיידי כדי שהמוצר החדש יופיע
             else:
                 st.warning("Product name already exists.")
 
