@@ -1049,7 +1049,7 @@ with st.sidebar:
     
                     # אתחול המודל עם הגדרת הכלים
                     model = GenerativeModel(
-                        "gemini-1.0-pro", 
+                        "gemini-2.5-pro", 
                         tools=[tools_vertex]
                     )
     
